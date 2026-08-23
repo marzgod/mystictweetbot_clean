@@ -1,29 +1,78 @@
 from flask import Flask, request, jsonify
-import tweepy
 import os
+import requests
 
 app = Flask(__name__)
 
 print("🚀 Mystic TweetBot is starting...")
 
-# X / Twitter credentials from Render environment variables
-api_key = os.getenv("API_KEY")
-api_secret = os.getenv("API_SECRET")
-access_token = os.getenv("ACCESS_TOKEN")
+X_ACCESS_TOKEN = os.getenv("X_ACCESS_TOKEN")
+X_REFRESH_TOKEN = os.getenv("X_REFRESH_TOKEN")
+X_CLIENT_ID = os.getenv("X_CLIENT_ID")
+X_CLIENT_SECRET = os.getenv("X_CLIENT_SECRET")
 
-# Supports either environment variable name
-access_secret = (
-    os.getenv("ACCESS_SECRET")
-    or os.getenv("ACCESS_TOKEN_SECRET")
-)
+TWEET_URL = "https://api.x.com/2/tweets"
+TOKEN_URL = "https://api.x.com/2/oauth2/token"
 
-# OAuth 1.0a user-authenticated Tweepy client
-client = tweepy.Client(
-    consumer_key=api_key,
-    consumer_secret=api_secret,
-    access_token=access_token,
-    access_token_secret=access_secret
-)
+
+def refresh_access_token():
+    global X_ACCESS_TOKEN, X_REFRESH_TOKEN
+
+    response = requests.post(
+        TOKEN_URL,
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": X_REFRESH_TOKEN,
+            "client_id": X_CLIENT_ID,
+        },
+        auth=(X_CLIENT_ID, X_CLIENT_SECRET),
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
+    )
+
+    if not response.ok:
+        print("❌ Token refresh failed:", response.text)
+        return False
+
+    token_data = response.json()
+
+    X_ACCESS_TOKEN = token_data.get("access_token", X_ACCESS_TOKEN)
+    X_REFRESH_TOKEN = token_data.get("refresh_token", X_REFRESH_TOKEN)
+
+    print("✅ OAuth 2.0 access token refreshed")
+    return True
+
+
+def send_tweet(tweet_text):
+    response = requests.post(
+        TWEET_URL,
+        headers={
+            "Authorization": f"Bearer {X_ACCESS_TOKEN}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "text": tweet_text
+        }
+    )
+
+    # If access token expired, refresh and retry once
+    if response.status_code == 401:
+        print("🔄 Access token rejected. Trying refresh...")
+
+        if refresh_access_token():
+            response = requests.post(
+                TWEET_URL,
+                headers={
+                    "Authorization": f"Bearer {X_ACCESS_TOKEN}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "text": tweet_text
+                }
+            )
+
+    return response
 
 
 @app.route("/")
@@ -33,22 +82,14 @@ def index():
 
 @app.route("/auth-test")
 def auth_test():
-    try:
-        me = client.get_me(user_auth=True)
+    response = requests.get(
+        "https://api.x.com/2/users/me",
+        headers={
+            "Authorization": f"Bearer {X_ACCESS_TOKEN}"
+        }
+    )
 
-        print("✅ Auth test successful:", me)
-
-        return jsonify({
-            "status": "ok",
-            "username": me.data.username
-        }), 200
-
-    except Exception as e:
-        print("❌ Auth test failed:", repr(e))
-
-        return jsonify({
-            "error": str(e)
-        }), 500
+    return jsonify(response.json()), response.status_code
 
 
 @app.route("/tweet", methods=["POST"])
@@ -60,25 +101,18 @@ def post_tweet():
         print("📥 Received tweet text:", tweet_text)
 
         if not tweet_text:
-            print("❌ No tweet content received.")
             return jsonify({
                 "error": "Missing tweet content"
             }), 400
 
-        response = client.create_tweet(
-            text=tweet_text,
-            user_auth=True
-        )
+        response = send_tweet(tweet_text)
 
-        print("✅ Tweet posted:", response)
+        print("📤 X response:", response.status_code, response.text)
 
-        return jsonify({
-            "status": "Tweet posted!",
-            "tweet_id": response.data["id"]
-        }), 200
+        return jsonify(response.json()), response.status_code
 
     except Exception as e:
-        print("❌ Error posting tweet:", repr(e))
+        print("❌ Tweet error:", repr(e))
 
         return jsonify({
             "error": str(e)
