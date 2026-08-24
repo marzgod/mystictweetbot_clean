@@ -7,6 +7,7 @@ app = Flask(__name__)
 print("🚀 Mystic TweetBot is starting...")
 
 client = tweepy.Client(
+    bearer_token=os.getenv("BEARER_TOKEN"),
     consumer_key=os.getenv("API_KEY"),
     consumer_secret=os.getenv("API_SECRET"),
     access_token=os.getenv("ACCESS_TOKEN"),
